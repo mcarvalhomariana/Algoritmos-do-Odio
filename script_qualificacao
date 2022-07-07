@@ -1,0 +1,284 @@
+#######ALGORTIMOS DO ÓDIO######
+###########script completo###########
+
+##########análise qualitativa###############
+#bibliotecas utilizadas
+library(devtools)
+library(rvest) 
+library(stringr) 
+library(tidyr)
+library(tidyverse)
+library(rtweet)
+library(janitor)
+library(tidytext)
+library(dplyr)
+library(tm)
+library(devtools)
+library(stopwords)
+library(reshape2)
+library(RColorBrewer)
+library(igraph)
+library(ggraph)
+library(widyr)
+
+#Coletar tweets
+token <- create_token( app = "user", consumer_key = " consumer_key ", consumer_secret = " consumer_secret ")
+votoimpresso <- search_tweets(q="voto impresso since:2021-08-10", n=50000000, include_rts = F, token = token, retryonratelimit = T)
+unique(votoimpresso)
+save.image("D:/votoimpresso")
+
+## Criar coluna dia e hora
+votoimpresso$dia <- strftime(votoimpresso$created_at, format="%d")
+votoimpresso$hora <- strftime(votoimpresso$created_at, format = "%m-%d %H")
+perfismaisativos <- data.frame(table(votoimpresso$screen_name)) %>%
+rename(Perfil = Var1,
+         N_tweets = Freq) %>%
+  arrange(-N_tweets) %>%
+  head(50)
+data.frame(table(votoimpresso$screen_name))
+
+## Perfis mais ativos
+png("perfismaisativos.png", width=1000,height=600)
+ggplot(perfismaisativos, aes(reorder(Perfil, N_tweets), N_tweets, fill= N_tweets)) +
+  geom_bar(stat = "identity") + coord_flip()
+dev.off()
+
+##Hahstags mais comuns
+png("hashtags.png", width=1000,height=600)
+hahstag <- votoimpresso %>%
+  unnest(hashtags) %>%
+  group_by(hashtags, hora) %>%
+  summarise(n = n()) %>% 
+  arrange(-n) %>%
+  head(50)  %>%
+  ts_plot(votoimpresso, "minutes") +
+  geom_line(aes(color=hashtags)) +
+  labs(title= "Horário do dia com mais tweets")
+dev.off()
+
+### quais perfis tiveram mais rt nos tweets?
+toprts <- votoimpresso %>%
+  group_by(screen_name) %>% 
+  summarise(rt_total = mean(retweet_count))  %>% 
+  na.omit()  %>% 
+  arrange(-rt_total) %>%
+  head(50)
+toptweets <- votoimpresso %>%
+  group_by(text) %>% 
+  summarise(rt_total = mean(retweet_count))  %>% 
+  na.omit()  %>% 
+  arrange(-rt_total) %>%
+  head(50)
+
+#Quais tweets foram mais compartilhados
+png("tweets.png", width=1000,height=600)
+text <- votoimpresso %>%
+  unnest(text) %>% 
+  group_by(text) %>% 
+  summarise(n = n()) %>% 
+  na.omit()  %>% 
+  arrange(-n) %>% 
+  head(10)
+dev.off()
+
+#Diascommaistweets
+dias <- votoimpresso %>%
+  group_by(dia) %>% 
+  summarise(n = n()) %>% 
+  na.omit()  %>% 
+  arrange(-n) %>% 
+  head(50)
+hora <- votoimpresso %>%
+  group_by(hora) %>% 
+  summarise(n = n()) %>% 
+  na.omit() 
+votoimpresso %>%
+  unnest(hashtags) %>% 
+  group_by(hashtags, hora) %>%
+  na.omit() %>%
+  summarise(n = n()) %>% 
+  arrange(-n) %>%
+  head(50)
+  ggplot(aes(x=hora, y=n, group=hashtags)) + 
+  geom_line(aes(color=hashtags))+
+  geom_point(aes(color=hashtags))+ theme_classic() +
+  labs(x = "", y = "", title = " ")
+
+#gráfico de hora com mais tweets
+timeline <- hora %>%
+  mutate(hora = fct_reorder(hora, desc(n)))
+png("timeline.png", width=800,height=1200)
+
+hora %>%
+  mutate(hora = fct_reorder(hora, desc(hora))) %>%
+  ggplot(aes(x=hora, y=n, fill=n))+
+  geom_bar(stat="identity", position=position_dodge())+
+  theme(axis.text.x = element_text(angle = -90, vjust = 0.5))+
+  coord_flip()
+dev.off()
+text <- votoimpresso %>%
+  select(screen_name, created_at, text, favorite_count, retweet_count, hashtags, name, status_url)
+
+#salvar em .csv
+write.csv(tophashtags, file = "hashtags.csv")
+write.csv(hora, file = "contagemporhora.csv")
+write.csv(toprts, file = "toprtstweets.csv")
+write.csv(perfismaisativos, file = "topuser.csv")
+write.csv(toptweets, file = "toptweets.csv")
+write.csv(text, file = "votoimpressocompleto.csv")
+
+##########análise de texto#############
+texto <- text %>%
+  select(screen_name, text)
+textolimpo <- texto %>%
+  mutate(text = str_to_lower(text))
+textolimpo <- textolimpo %>%
+  mutate(text = str_replace_all(text, "[aàáâäãåæ]", "a"))
+textolimpo <- textolimpo %>%
+  mutate(text = str_replace_all(text,"[eèéêë]", "e"))
+textolimpo <- textolimpo %>%
+  mutate(text = str_replace_all(text,"[iìíîï]", "i"))
+textolimpo <- textolimpo %>%
+  mutate(text = str_replace_all(text,"[oòóôöõø]", "o"))
+textolimpo <- textolimpo %>%
+  mutate(text = str_replace_all(text, "[uùúûü]", "u"))
+textolimpo <- textolimpo %>%
+  mutate(text = str_replace_all(text,"ç", "c"))
+
+#dividir em trigramas
+trigramas <- textolimpo %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 3)
+trigramas %>%
+  count(bigram, sort = TRUE)
+stoppt <- read.csv2("stop_mariana.csv")
+
+#transformar stopwords em character
+stoppt<- stoppt %>%
+  mutate(word = as.vector(word))
+
+#limpar stopwords
+stoppt <- stoppt %>%
+  mutate(word = str_to_lower(word))
+
+stoppt <- stoppt %>%
+  mutate(word = str_replace_all(word, "[aàáâäãåæ]", "a"))
+stoppt <- stoppt %>%
+  mutate(word = str_replace_all(word,"[eèéêë]", "e"))
+stoppt <- stoppt %>%
+  mutate(word = str_replace_all(word,"[iìíîï]", "i"))
+stoppt <- stoppt %>%
+  mutate(word = str_replace_all(word,"[oòóôöõø]", "o"))
+stoppt <- stoppt %>%
+  mutate(word = str_replace_all(word, "[uùúûü]", "u"))
+stoppt <- stoppt %>%
+  mutate(word = str_replace_all(word,"ç", "c"))
+
+#trigramas
+trigramas %>%
+  separate(bigram, c("word1", "word2", "word3"), sep = " ") %>%
+  filter(!word1 %in% stoppt$word,
+         !word2 %in% stoppt$word,
+         !word3 %in% stoppt$word) %>%
+  count(word1, word2, word3, sort = TRUE)
+trigramas %>% #grafico para a tese
+  separate(bigram, c("word1", "word2", "word3"), sep = " ") %>%
+  filter(!word1 %in% stoppt$word,
+         !word2 %in% stoppt$word,
+         !word3 %in% stoppt$word) %>%
+  count(word1, word2, word3, sort = TRUE) %>%
+ unite("bigram", c(word1, word2, word3), sep = " ") %>%
+  top_n(10) %>%
+  arrange(-n)%>%
+  ggplot(aes(x = reorder(bigram,n),
+             y = n, fill=n)) +
+  geom_bar(stat="identity")+
+  coord_flip()
+
+#trigramas por grupo
+png("trigramasbolso.png", width=1000,height=600)
+trigramas %>% 
+  separate(bigram, c("word1", "word2", "word3"), sep = " ") %>%
+  filter(!word1 %in% stoppt$word,
+         !word2 %in% stoppt$word,
+         !word3 %in% stoppt$word) %>%
+  filter(word1 == "bolsonaro") %>%
+  count(word1, word2, word3, sort = TRUE) %>%
+  unite("bigram", c(word1, word2, word3), sep = " ") %>%
+  top_n(10) %>%
+  arrange(-n)%>%
+  ggplot(aes(x = reorder(bigram,n),
+             y = n, fill=n)) +
+  geom_bar(stat="identity")+
+  theme(axis.text=element_text(size=14))+
+  coord_flip()
+dev.off()
+png("trigramastse.png", width=1000,height=600)
+trigramas %>% 
+  separate(bigram, c("word1", "word2", "word3"), sep = " ") %>%
+  filter(!word1 %in% stoppt$word,
+         !word2 %in% stoppt$word,
+         !word3 %in% stoppt$word) %>%
+  filter(word1 == "tse") %>%
+  count(word1, word2, word3, sort = TRUE) %>%
+  unite("bigram", c(word1, word2, word3), sep = " ") %>%
+  top_n(10) %>%
+  arrange(-n)%>%
+  ggplot(aes(x = reorder(bigram,n),
+             y = n, fill=n)) +
+  geom_bar(stat="identity")+
+  theme(axis.text=element_text(size=14))+
+  coord_flip()
+dev.off()
+
+#top10 tweets relacionados ao Bolsonaro
+bolsotop10 <- text %>%
+  select (screen_name, created_at, text, favorite_count, retweet_count) %>%
+  filter(str_detect(text, 'bolsonaro')) %>%
+  arrange(-retweet_count) %>%
+  head(10)
+write.csv(bolsotop10, file = "bolsotop10.csv")
+
+#top10 tweets relacionados ao TSE
+tsetop10 <- text %>%
+  select (screen_name, created_at, text, favorite_count, retweet_count) %>%
+  filter(str_detect(text, 'tse')) %>%
+  arrange(-retweet_count) %>%
+  head(10)
+write.csv(tsetop10, file = "tsetop10.csv")
+
+#gráfico de correlação entre usuários e termos
+set.seed(123)
+a <- grid::arrow(type = "closed", length = unit(.15, "inches"))
+ggraph(interceptgraph, layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(color = "lightblue", size = 5) +
+  geom_node_text(aes(label = name), vjust = 1, hjust = 1) +
+  theme_void()
+termos <- textolimpo %>%
+  unnest_tokens(word, text) %>%
+  filter(!word %in% stop_words$word)
+set.seed(123)
+pares <- termos %>%
+  pairwise_count(word, screen_name, sort = TRUE)
+word_pairs
+word_cor <- ps_words %>%
+  group_by(word) %>%
+  filter(n() >= 20) %>%
+  pairwise_cor(word, screen_name) %>%
+  filter(!is.na(correlation))
+set.seed(123)
+png("correlacaovotoimpresso.png", width=1000,height=1000)
+pares %>%
+  group_by(word) %>%
+  filter(!word %in% stoppt$word) %>%
+  filter(n() >= 500) %>%
+  pairwise_cor(word, screen_name) %>%
+  filter(!is.na(correlation),
+         correlation > .15) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = correlation), show.legend = FALSE) +
+  geom_node_point(color = "lightblue", size = 5) +
+  geom_node_text(aes(label = name), repel = TRUE) +
+  theme_void()
+dev.off()
